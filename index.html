@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeskyPi</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0c0e13;--surface:#151820;--surface2:#1c2030;--surface3:#242838;
+  --border:#2a2f40;--text:#e1e4ed;--dim:#7a7f94;--accent:#6c8cff;
+  --danger:#ff5c5c;--success:#4caf7d;--warning:#f5a623;--radius:8px;
+}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+header{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 24px;border-bottom:1px solid var(--border);
+  background:var(--surface);position:sticky;top:0;z-index:10;
+}
+header h1{font-size:1.15rem;font-weight:700;letter-spacing:-.5px}
+.hdr-right{display:flex;gap:14px;align-items:center;font-size:.82rem;color:var(--dim)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block}
+.dot.off{background:var(--danger)}
+main{padding:20px 24px;max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+
+/* Sections */
+.section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.section-title{
+  font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--dim);padding:14px 18px 10px;
+}
+
+/* Status grid */
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
+.status-grid>*{background:var(--surface);padding:14px 18px}
+@media(max-width:700px){.status-grid{grid-template-columns:1fr}}
+.stat-label{font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px}
+.stat-val{font-family:'SF Mono',ui-monospace,monospace;font-size:.88rem}
+.stat-sub{font-size:.75rem;color:var(--dim);margin-top:2px}
+.stat-row{display:flex;gap:20px;flex-wrap:wrap}
+.stat-item{display:flex;flex-direction:column}
+.mono{font-family:'SF Mono',ui-monospace,monospace}
+
+/* Network table */
+.net-tbl{width:100%;border-collapse:collapse;font-size:.82rem;font-family:'SF Mono',ui-monospace,monospace;table-layout:fixed}
+.net-tbl th{text-align:left;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:4px 8px;border-bottom:1px solid var(--border)}
+.net-tbl td{padding:5px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+.net-tbl tr:last-child td{border-bottom:none}
+.net-name{font-weight:600;font-size:.85rem}
+.net-badge{font-size:.62rem;padding:2px 0;border-radius:3px;font-weight:600;text-transform:uppercase;display:inline-block;width:28px;text-align:center}
+.net-badge.UP{background:#1e3a2f;color:var(--success)}
+.net-badge.DOWN{background:#3a1a1a;color:var(--danger)}
+.bw-rx{color:#6cb4ee}.bw-tx{color:#ee8a6c}
+/* Tooltip */
+.tip-trigger{cursor:default;border-bottom:1px dashed var(--border)}
+.tooltip{
+  position:fixed;z-index:50;background:var(--surface2);border:1px solid var(--border);
+  border-radius:8px;padding:10px 0;min-width:200px;max-width:340px;
+  box-shadow:0 8px 30px rgba(0,0,0,.5);font-size:.75rem;
+  opacity:0;transform:translateY(-4px);transition:opacity .15s,transform .15s;pointer-events:none;
+  font-family:'SF Mono',ui-monospace,monospace;
+}
+.tooltip.show{opacity:1;transform:translateY(0);pointer-events:auto}
+.tip-row{display:flex;justify-content:space-between;align-items:center;padding:3px 12px;gap:12px;cursor:pointer;transition:background .1s}
+.tip-row:hover{background:var(--surface3)}
+.tip-label{color:var(--dim);font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;flex-shrink:0}
+.tip-val{color:var(--text);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tip-sep{border-top:1px solid var(--border);margin:4px 0}
+.tip-copied{position:absolute;right:12px;top:6px;font-size:.6rem;color:var(--success);opacity:0;transition:opacity .2s}
+.tip-copied.show{opacity:1}
+
+.wifi-info{font-size:.72rem;color:var(--dim);margin-top:2px;display:flex;align-items:center;gap:10px}
+
+/* Root device (collapsible) */
+.root-toggle{
+  width:100%;background:none;border:none;border-top:1px solid var(--border);
+  padding:12px 18px;color:var(--dim);font-size:.82rem;text-align:left;cursor:pointer;
+  display:flex;align-items:center;gap:8px;font-family:inherit;
+}
+.root-toggle:hover{background:var(--surface2)}
+.root-toggle .arrow{transition:transform .2s;font-size:.7rem}
+.root-toggle.open .arrow{transform:rotate(90deg)}
+.root-detail{border-top:1px solid var(--border);padding:14px 18px;display:none}
+.root-detail.open{display:block}
+.root-parts{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+
+/* Sparkline histograms */
+.spark-row{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}
+.spark-box{display:flex;flex-direction:column;gap:2px}
+.spark-hdr{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.spark-val{font-family:'SF Mono',ui-monospace,monospace;font-size:.88rem;font-weight:700}
+.spark-lbl{font-size:.62rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+
+/* USB adapters table */
+.adapter-tbl{width:100%;border-collapse:collapse;font-size:.82rem;table-layout:fixed}
+.adapter-tbl th{text-align:left;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:6px 8px;border-bottom:1px solid var(--border)}
+.adapter-tbl td{padding:6px 8px;border-bottom:1px solid var(--border)}
+.adapter-tbl tr:last-child td{border-bottom:none}
+.adapter-name{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.adapter-link{color:var(--accent);cursor:pointer;font-family:'SF Mono',ui-monospace,monospace;font-size:.78rem}
+.adapter-link:hover{text-decoration:underline}
+.adapter-none{color:var(--dim);font-style:italic;font-size:.78rem}
+
+/* Drive highlight animation */
+@keyframes driveHighlight{0%{box-shadow:0 0 0 2px var(--accent)}50%{box-shadow:0 0 12px 3px var(--accent)}100%{box-shadow:none}}
+.drive-card.highlight{animation:driveHighlight 1.5s ease-out}
+
+/* Drive cards */
+.drive-card{border-bottom:1px solid var(--border);padding:18px}
+.drive-card:last-child{border-bottom:none}
+.drive-hdr{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.drive-info{flex:1;min-width:0}
+.drive-model{font-weight:600;font-size:.95rem;display:block}
+.drive-meta{font-size:.78rem;color:var(--dim);font-family:'SF Mono',ui-monospace,monospace;display:block;margin-top:2px}
+.drive-bw{display:flex;gap:16px;margin-top:6px;font-size:.78rem;font-family:'SF Mono',ui-monospace,monospace}
+.parts{margin-top:10px;display:flex;flex-direction:column;gap:4px}
+.part{
+  background:var(--surface2);border-radius:5px;padding:8px 12px;
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+  font-size:.82rem;
+}
+.part-left{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+.part-name{font-weight:600;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0}
+.part-info{color:var(--dim);font-size:.75rem;font-family:'SF Mono',ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badges{display:flex;gap:4px;flex-shrink:0}
+.badge{font-size:.6rem;padding:2px 6px;border-radius:3px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.badge-nbd{background:#3b3866;color:#a78bfa}
+.badge-nfs{background:#1e3a2f;color:#6ee7b7}
+
+/* Operation inline */
+.drive-op{margin-top:10px;background:var(--surface3);border-radius:6px;padding:10px 14px}
+.op-row{display:flex;justify-content:space-between;align-items:center;font-size:.82rem}
+.op-type{font-weight:600;text-transform:capitalize}
+.op-msg{color:var(--dim);font-size:.78rem;margin-top:3px}
+.op-bar{height:5px;background:var(--surface);border-radius:3px;margin-top:6px;overflow:hidden}
+.op-fill{height:100%;border-radius:3px;transition:width .5s}
+.op-fill.active{background:var(--accent)}
+.op-fill.done{background:var(--success)}
+.op-fill.error{background:var(--danger)}
+.op-queued{margin-top:6px;font-size:.75rem;color:var(--dim);font-style:italic}
+
+/* Actions bar */
+.drive-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.btn{
+  padding:6px 14px;border-radius:6px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);font-size:.78rem;font-weight:500;
+  cursor:pointer;transition:all .15s;font-family:inherit;
+}
+.btn:hover:not(:disabled){background:var(--surface3);border-color:var(--accent)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:hover:not(:disabled){background:#5a7ae6}
+.btn-danger{border-color:#5c2020;color:var(--danger)}
+.btn-danger:hover:not(:disabled){background:#3a1a1a;border-color:var(--danger)}
+.btn-warn{border-color:#5c4a10;color:var(--warning)}
+.btn-warn:hover:not(:disabled){background:#3a3010;border-color:var(--warning)}
+.btn-sm{padding:4px 10px;font-size:.72rem}
+.empty{padding:28px 18px;text-align:center;color:var(--dim);font-size:.88rem}
+.empty-sub{font-size:.78rem;margin-top:4px}
+.no-parts{font-size:.82rem;color:var(--dim);margin-top:8px;font-style:italic}
+
+/* Modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.modal-bg.hidden{display:none}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:90%;max-width:460px;padding:24px}
+.modal h3{font-size:1.05rem;margin-bottom:10px}
+.modal p{color:var(--dim);font-size:.88rem;margin-bottom:14px;white-space:pre-line}
+.modal-dev{background:var(--surface2);border-radius:6px;padding:10px 14px;font-family:'SF Mono',ui-monospace,monospace;font-size:.82rem;margin-bottom:14px}
+.modal-btns{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.radio-group{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.radio-group label{display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer}
+.radio-group input{accent-color:var(--accent)}
+.confirm-box{margin-top:10px}
+.confirm-box>label{font-size:.75rem;color:var(--danger);font-weight:600;display:block;margin-bottom:4px}
+.confirm-box input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:.88rem;font-family:inherit;outline:none}
+.confirm-box input:focus{border-color:var(--accent)}
+
+/* Flash modal form */
+.flash-form{display:flex;flex-direction:column;gap:12px}
+.fg{display:flex;flex-direction:column;gap:3px}
+.fg label{font-size:.7rem;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.fg select,.fg input[type="text"],.fg input[type="password"]{
+  background:var(--surface2);border:1px solid var(--border);border-radius:5px;
+  padding:7px 10px;color:var(--text);font-size:.85rem;font-family:inherit;outline:none;
+}
+.fg select:focus,.fg input:focus{border-color:var(--accent)}
+.img-detail{font-size:.72rem;color:var(--dim)}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.settings-grid .full{grid-column:1/-1}
+.check{display:flex;align-items:center;gap:6px;font-size:.85rem}
+.check input{accent-color:var(--accent);width:15px;height:15px}
+details summary{cursor:pointer;font-size:.82rem;font-weight:600;color:var(--accent);padding:6px 0;user-select:none}
+details[open] summary{margin-bottom:8px}
+
+/* WiFi entries */
+.wifi-entry{display:flex;gap:6px;align-items:center}
+.wifi-entry input{flex:1;min-width:0;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:6px 8px;color:var(--text);font-size:.82rem;font-family:inherit;outline:none}
+.wifi-entry input:focus{border-color:var(--accent)}
+.wifi-entry .wf-cc{flex:0 0 50px!important}
+
+/* Toast */
+.toasts{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:6px}
+.toast{padding:10px 18px;border-radius:7px;font-size:.85rem;font-weight:500;animation:fadeIn .25s;min-width:220px}
+.toast-success{background:#1e3a2f;color:var(--success);border:1px solid #2d5a45}
+.toast-error{background:#3a1a1a;color:var(--danger);border:1px solid #5c2020}
+.toast-info{background:#1a2640;color:var(--accent);border:1px solid #2a3a60}
+@keyframes fadeIn{from{transform:translateX(60px);opacity:0}to{transform:none;opacity:1}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="title">DeskyPi</h1>
+  <div class="hdr-right">
+    <span id="uptime"></span>
+    <span id="dot" class="dot"></span>
+  </div>
+</header>
+
+<main>
+  <!-- ====== SYSTEM STATUS ====== -->
+  <div class="section">
+    <div class="section-title">System Status</div>
+    <div class="status-grid">
+      <div>
+        <div class="stat-label">CPU &amp; Memory</div>
+        <div class="spark-row">
+          <div class="spark-box" style="flex:1;min-width:120px">
+            <div class="spark-hdr"><span class="spark-lbl">CPU</span><span class="spark-val" id="cpu-val">--</span></div>
+            <div id="cpu-spark"></div>
+            <div class="stat-sub" id="cpu-temp"></div>
+          </div>
+          <div class="spark-box" style="flex:1;min-width:120px">
+            <div class="spark-hdr"><span class="spark-lbl">RAM</span><span class="spark-val" id="mem-val">--</span></div>
+            <div id="mem-spark"></div>
+            <div class="stat-sub" id="mem-detail"></div>
+          </div>
+        </div>
+        <div class="stat-sub" id="pi-model" style="margin-top:8px"></div>
+      </div>
+      <div>
+        <div class="stat-label">Network</div>
+        <table class="net-tbl" id="net-info"><tbody></tbody></table>
+      </div>
+    </div>
+    <div id="usb-adapters" style="padding:12px 18px;border-top:1px solid var(--border)">
+      <div class="stat-label">USB Adapters</div>
+      <table class="adapter-tbl" id="adapter-list"><tbody></tbody></table>
+    </div>
+    <button class="root-toggle" id="root-toggle" onclick="toggleRoot()">
+      <span class="arrow">&#9654;</span>
+      <span id="root-summary">Root Device</span>
+    </button>
+    <div class="root-detail" id="root-detail"></div>
+  </div>
+
+  <!-- ====== CONNECTED DRIVES ====== -->
+  <div class="section">
+    <div class="section-title">Connected Drives</div>
+    <div id="drives"><div class="empty">Connecting...</div></div>
+  </div>
+</main>
+
+<div class="modal-bg hidden" id="modal-bg"><div class="modal" id="modal"></div></div>
+<div class="tooltip" id="tooltip"></div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+let S = null; // current status
+let images = [];
+let defaults = {};
+let es = null;
+
+// ==================== Tooltip ====================
+const tipEl = document.getElementById('tooltip');
+let tipTimer = null;
+let tipLock = false;
+
+function tipRow(label, val) {
+  if (!val && val !== 0) return '';
+  const v = String(val);
+  return `<div class="tip-row" onclick="tipCopy('${esc(v.replace(/'/g, "\\'"))}', this)"><span class="tip-label">${esc(label)}</span><span class="tip-val">${esc(v)}</span></div>`;
+}
+
+function tipCopy(text, rowEl) {
+  navigator.clipboard.writeText(text).then(() => {
+    let ind = tipEl.querySelector('.tip-copied');
+    if (!ind) {
+      ind = document.createElement('div');
+      ind.className = 'tip-copied';
+      tipEl.appendChild(ind);
+    }
+    ind.textContent = 'copied';
+    ind.classList.add('show');
+    setTimeout(() => ind.classList.remove('show'), 800);
+  });
+}
+
+function showTip(anchor, html) {
+  tipEl.innerHTML = html;
+  tipEl.classList.add('show');
+  tipLock = false;
+  const r = anchor.getBoundingClientRect();
+  const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+  let x = r.left, y = r.bottom + 6;
+  if (x + tw > window.innerWidth - 8) x = window.innerWidth - tw - 8;
+  if (y + th > window.innerHeight - 8) y = r.top - th - 6;
+  tipEl.style.left = x + 'px';
+  tipEl.style.top = y + 'px';
+}
+
+function hideTip() {
+  tipTimer = setTimeout(() => { if (!tipLock) tipEl.classList.remove('show'); }, 200);
+}
+
+tipEl.addEventListener('mouseenter', () => { clearTimeout(tipTimer); tipLock = true; });
+tipEl.addEventListener('mouseleave', () => { tipLock = false; tipEl.classList.remove('show'); });
+
+function showNetTip(el, idx) {
+  clearTimeout(tipTimer);
+  const n = S?.network?.[idx];
+  if (!n) return;
+  let h = `<div style="padding:3px 12px 5px;font-weight:600;font-size:.82rem;color:var(--text)">${esc(n.name)}</div>`;
+  h += '<div class="tip-sep"></div>';
+  h += tipRow('IPv4', n.ip ? `${n.ip}/${n.prefix || '?'}` : null);
+  h += tipRow('Gateway', n.gateway);
+  h += tipRow('MAC', n.mac);
+  h += tipRow('MTU', n.mtu);
+  h += tipRow('Metric', n.metric);
+  h += tipRow('State', n.state);
+  if (n.ipv6 && n.ipv6.length) {
+    h += '<div class="tip-sep"></div>';
+    for (const a of n.ipv6) h += tipRow('IPv6', a);
+    if (n.gateway6) h += tipRow('GW6', n.gateway6);
+  }
+  if (n.wifi) {
+    h += '<div class="tip-sep"></div>';
+    h += tipRow('SSID', n.wifi.ssid);
+    h += tipRow('Signal', `${n.wifi.signal} dBm`);
+    h += tipRow('Bitrate', n.wifi.bitrate);
+  }
+  h += `<div style="padding:3px 12px;font-size:.58rem;color:var(--dim);text-align:center;margin-top:2px">click any row to copy</div>`;
+  showTip(el, h);
+}
+
+function showAdapterTip(el, name, id, bus, dev) {
+  clearTimeout(tipTimer);
+  let h = `<div style="padding:3px 12px 5px;font-weight:600;font-size:.82rem;color:var(--text);white-space:normal">${esc(name)}</div>`;
+  h += '<div class="tip-sep"></div>';
+  h += tipRow('ID', id);
+  h += tipRow('Bus', bus);
+  h += tipRow('Device', dev);
+  h += `<div style="padding:3px 12px;font-size:.58rem;color:var(--dim);text-align:center;margin-top:2px">click any row to copy</div>`;
+  showTip(el, h);
+}
+
+// ==================== SSE ====================
+function connect() {
+  if (es) es.close();
+  es = new EventSource('/api/events');
+  Q('#dot').className = 'dot';
+  let seeded = false;
+  es.onmessage = e => { S = JSON.parse(e.data); if (!seeded && S.history) { seedHist(S.history); seeded = true; } render(); };
+  es.onerror = () => { Q('#dot').className = 'dot off'; es.close(); setTimeout(connect, 3000); };
+}
+
+function Q(s) { return document.querySelector(s); }
+function QA(s) { return document.querySelectorAll(s); }
+function esc(s) { return s == null ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtSz(b) { b=Number(b); if(!b) return '0 B'; const u=['B','KB','MB','GB','TB']; const i=Math.min(Math.floor(Math.log(b)/Math.log(1024)),u.length-1); return (b/Math.pow(1024,i)).toFixed(i>0?1:0)+' '+u[i]; }
+function fmtRate(b) { b=Number(b); if(!b||b<1) return '0 B/s'; const u=['B/s','KB/s','MB/s','GB/s']; const i=Math.min(Math.floor(Math.log(b)/Math.log(1024)),u.length-1); return (b/Math.pow(1024,i)).toFixed(i>0?1:0)+' '+u[i]; }
+function fmtUp(s) { s=Math.floor(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60); return 'up '+(d?d+'d ':'')+(d||h?h+'h ':'')+m+'m'; }
+
+// ==================== Sparkline Histogram ====================
+const hist = {};
+const HIST_N = 30;
+
+function seedHist(serverHist) {
+  if (!serverHist) return;
+  for (const [k, v] of Object.entries(serverHist)) {
+    if (Array.isArray(v)) hist[k] = v.slice(-HIST_N);
+  }
+}
+
+function pushH(key, val) {
+  if (!hist[key]) hist[key] = [];
+  hist[key].push(val);
+  if (hist[key].length > HIST_N) hist[key].shift();
+}
+
+function histMax(prefix) {
+  let mx = 0;
+  for (const [k, v] of Object.entries(hist)) {
+    if (k.startsWith(prefix)) for (const val of v) if (val > mx) mx = val;
+  }
+  return mx || 1;
+}
+
+function sparkSvg(key, w, h, color, maxFixed) {
+  const d = hist[key] || [];
+  if (!d.length) return `<svg width="${w}" height="${h}"></svg>`;
+  const mx = maxFixed || Math.max(...d, 0.001);
+  const logMx = Math.log1p(mx);
+  const bw = w / HIST_N;
+  let bars = '';
+  for (let i = 0; i < d.length; i++) {
+    const bh = logMx > 0 ? Math.max(d[i] > 0 ? 1 : 0, (Math.log1p(d[i]) / logMx) * h) : 0;
+    bars += `<rect x="${(HIST_N - d.length + i) * bw}" y="${h - bh}" width="${Math.max(bw - 0.5, 0.5)}" height="${bh}" fill="${color}" rx="0.5"/>`;
+  }
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block">${bars}</svg>`;
+}
+
+function sparkSvgLinear(key, w, h, color, maxFixed) {
+  const d = hist[key] || [];
+  if (!d.length) return `<svg width="${w}" height="${h}"></svg>`;
+  const mx = maxFixed || Math.max(...d, 0.001);
+  const bw = w / HIST_N;
+  let bars = '';
+  for (let i = 0; i < d.length; i++) {
+    const bh = Math.max(d[i] > 0 ? 1 : 0, (d[i] / mx) * h);
+    bars += `<rect x="${(HIST_N - d.length + i) * bw}" y="${h - bh}" width="${Math.max(bw - 0.5, 0.5)}" height="${bh}" fill="${color}" rx="0.5"/>`;
+  }
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block">${bars}</svg>`;
+}
+
+function memSparkSvg(w, h, color) {
+  const d = hist['mem'] || [];
+  if (!d.length) return `<svg width="${w}" height="${h}"></svg>`;
+  const bw = w / HIST_N;
+  let bars = '';
+  for (let i = 0; i < d.length; i++) {
+    const bh = Math.max(d[i] > 0 ? 1 : 0, (d[i] / 100) * h);
+    bars += `<rect x="${(HIST_N - d.length + i) * bw}" y="${h - bh}" width="${Math.max(bw - 0.5, 0.5)}" height="${bh}" fill="${color}" opacity="0.7" rx="0.5"/>`;
+  }
+  // Delta overlay: scale deltas so the largest fills the full height
+  let deltas = '';
+  if (d.length > 1) {
+    const dv = [];
+    for (let i = 1; i < d.length; i++) dv.push(Math.abs(d[i] - d[i - 1]));
+    const dMax = Math.max(...dv, 0.001);
+    for (let i = 0; i < dv.length; i++) {
+      const bh = Math.max(dv[i] > 0 ? 1 : 0, (dv[i] / dMax) * h);
+      deltas += `<rect x="${(HIST_N - d.length + 1 + i) * bw}" y="${h - bh}" width="${Math.max(bw - 0.5, 0.5)}" height="${bh}" fill="#ff5c5c" opacity="0.8" rx="0.5"/>`;
+    }
+  }
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block">${bars}${deltas}</svg>`;
+}
+
+function pctColor(pct) {
+  if (pct < 60) return '#6c8cff';
+  if (pct < 85) return '#f5a623';
+  return '#ff5c5c';
+}
+
+function wifiColor(dbm) {
+  if (dbm >= -50) return '#4caf7d';
+  if (dbm >= -67) return '#6c8cff';
+  if (dbm >= -75) return '#f5a623';
+  return '#ff5c5c';
+}
+
+// ==================== Render ====================
+function render() {
+  const s = S; if (!s) return;
+  Q('#title').textContent = s.hostname || 'DeskyPi';
+  document.title = s.hostname || 'DeskyPi';
+  Q('#uptime').textContent = fmtUp(s.uptime);
+
+  // CPU & Memory sparklines
+  pushH('cpu', s.system.cpuUsage);
+  pushH('mem', s.system.memPercent);
+  Q('#cpu-val').textContent = `${s.system.cpuUsage.toFixed(1)}%`;
+  Q('#cpu-val').style.color = pctColor(s.system.cpuUsage);
+  Q('#cpu-spark').innerHTML = sparkSvgLinear('cpu', 140, 28, pctColor(s.system.cpuUsage), 100);
+  Q('#cpu-temp').textContent = `${s.system.cpuTemp.toFixed(1)}°C · ${s.system.cores} cores`;
+  Q('#mem-val').textContent = `${s.system.memPercent}%`;
+  Q('#mem-val').style.color = pctColor(s.system.memPercent);
+  Q('#mem-spark').innerHTML = memSparkSvg(140, 28, pctColor(s.system.memPercent));
+  const memUsed = s.system.memTotal - s.system.memAvailable;
+  Q('#mem-detail').textContent = `${fmtSz(memUsed*1024)} / ${fmtSz(s.system.memTotal*1024)}`;
+  Q('#pi-model').textContent = s.system.model;
+
+  // Network (sorted by metric on server)
+  for (const n of s.network) {
+    pushH(`net:${n.name}:rx`, n.rxRate);
+    pushH(`net:${n.name}:tx`, n.txRate);
+    if (n.wifi) pushH('wifi', n.wifi.signal);
+  }
+  const netMax = histMax('net:');
+  let nh = '<colgroup><col style="width:42px"><col style="width:30%"><col style="width:35%"><col style="width:35%"></colgroup><thead><tr><th></th><th>Interface</th><th>RX</th><th>TX</th></tr></thead><tbody>';
+  for (let ni = 0; ni < s.network.length; ni++) {
+    const n = s.network[ni];
+    nh += `<tr>
+      <td><span class="net-badge ${n.state}">${n.state === 'UP' ? 'Up' : 'Dn'}</span></td>
+      <td><span class="net-name tip-trigger" onmouseenter="showNetTip(this,${ni})" onmouseleave="hideTip()">${esc(n.name)}</span> <span style="color:var(--dim);font-size:.78rem">${n.ip||''}</span></td>
+      <td><div style="display:flex;align-items:center;gap:4px"><div style="flex-shrink:0;width:70px">${sparkSvg(`net:${n.name}:rx`, 70, 18, '#6cb4ee', netMax)}</div><span class="bw-rx" style="font-size:.68rem;min-width:62px;text-align:right">${fmtRate(n.rxRate)}</span></div></td>
+      <td><div style="display:flex;align-items:center;gap:4px"><div style="flex-shrink:0;width:70px">${sparkSvg(`net:${n.name}:tx`, 70, 18, '#ee8a6c', netMax)}</div><span class="bw-tx" style="font-size:.68rem;min-width:62px;text-align:right">${fmtRate(n.txRate)}</span></div></td>
+    </tr>`;
+    if (n.wifi) {
+      const dbm = n.wifi.signal;
+      nh += `<tr><td colspan="4" style="padding:4px 8px 8px">
+        <div class="wifi-info">
+          <div style="display:flex;align-items:center;gap:8px">
+            ${sparkSvg('wifi', 70, 18, wifiColor(dbm))}
+            <span style="color:${wifiColor(dbm)};font-weight:600;font-size:.82rem">${dbm} dBm</span>
+            <span>${esc(n.wifi.ssid)} · ${esc(n.wifi.bitrate)}</span>
+          </div>
+        </div>
+      </td></tr>`;
+    }
+  }
+  nh += '</tbody>';
+  Q('#net-info').innerHTML = nh;
+
+  // USB Adapters as table with drive links
+  if (s.usbAdapters.length) {
+    Q('#usb-adapters').style.display = '';
+    let ah = '<colgroup><col style="width:55%"><col style="width:15%"><col style="width:30%"></colgroup><thead><tr><th>Device</th><th>ID</th><th>Connected Drive</th></tr></thead><tbody>';
+    for (const a of s.usbAdapters) {
+      const drive = s.drives.find(d => d.usbId === a.id);
+      const driveCell = drive
+        ? `<span class="adapter-link" onclick="scrollToDrive('${drive.name}')">${drive.name} — ${esc(drive.model || drive.name)} (${fmtSz(drive.size)})</span>`
+        : '<span class="adapter-none">No disk</span>';
+      ah += `<tr><td><span class="adapter-name tip-trigger" onmouseenter="showAdapterTip(this,${JSON.stringify(esc(a.name))},${JSON.stringify(a.id)},${JSON.stringify(a.bus)},${JSON.stringify(a.device)})" onmouseleave="hideTip()">${esc(a.name)}</span></td><td class="mono" style="font-size:.72rem;color:var(--dim)">${a.id}</td><td>${driveCell}</td></tr>`;
+    }
+    ah += '</tbody>';
+    Q('#adapter-list').innerHTML = ah;
+  } else {
+    Q('#usb-adapters').style.display = 'none';
+  }
+
+  // Root device
+  if (s.rootDevice) {
+    Q('#root-summary').textContent = `Root Device (${s.rootDevice.name} · ${fmtSz(s.rootDevice.size)})`;
+    let rh = '';
+    if (s.rootDevice.children) {
+      rh = '<div class="root-parts">';
+      for (const p of s.rootDevice.children) {
+        rh += `<div class="part"><div class="part-left"><span class="part-name">${p.name}</span><span class="part-info">${fmtSz(p.size)} · ${p.fstype||'?'}${p.label?' · '+esc(p.label):''} → ${esc(p.mountpoint||'')}</span></div></div>`;
+      }
+      rh += '</div>';
+    }
+    Q('#root-detail').innerHTML = rh;
+  }
+
+  // Drives
+  renderDrives(s.drives, s.nbdExports);
+}
+
+function toggleRoot() {
+  const btn = Q('#root-toggle');
+  const det = Q('#root-detail');
+  btn.classList.toggle('open');
+  det.classList.toggle('open');
+}
+
+function renderDrives(drives, nbdExports) {
+  const el = Q('#drives');
+  if (!drives.length) {
+    el.innerHTML = '<div class="empty">No USB storage devices connected<div class="empty-sub">Plug in a USB drive to get started</div></div>';
+    return;
+  }
+  let h = '';
+  for (const d of drives) { pushH(`drv:${d.name}:r`, d.readRate); pushH(`drv:${d.name}:w`, d.writeRate); }
+  const drvMax = histMax('drv:');
+  for (const d of drives) {
+    const ops = d.operations || [];
+    const activeOp = ops.find(o => !['done','error','queued'].includes(o.status));
+    const queuedOps = ops.filter(o => o.status === 'queued');
+    const doneOps = ops.filter(o => o.status === 'done' || o.status === 'error');
+    const busy = !!activeOp;
+    const hasParts = d.hasPartitions;
+
+    h += `<div class="drive-card" id="drive-${d.name}">
+      <div class="drive-hdr">
+        <div class="drive-info">
+          <span class="drive-model">${esc(d.model || d.name)}</span>
+          <span class="drive-meta">/dev/${d.name} · ${fmtSz(d.size)}${d.serial ? ' · S/N: '+esc(d.serial) : ''}${d.rev ? ' · FW: '+esc(d.rev) : ''}${d.usbVersion ? ' · '+esc(d.usbVersion) : ''}</span>
+        </div>
+        <div class="drive-bw" style="display:flex;gap:10px;align-items:center">
+          <div style="display:flex;align-items:center;gap:4px"><div style="flex-shrink:0;width:50px">${sparkSvg(`drv:${d.name}:r`, 50, 16, '#6cb4ee', drvMax)}</div><span class="bw-rx" style="font-size:.68rem;min-width:62px;text-align:right">R ${fmtRate(d.readRate)}</span></div>
+          <div style="display:flex;align-items:center;gap:4px"><div style="flex-shrink:0;width:50px">${sparkSvg(`drv:${d.name}:w`, 50, 16, '#ee8a6c', drvMax)}</div><span class="bw-tx" style="font-size:.68rem;min-width:62px;text-align:right">W ${fmtRate(d.writeRate)}</span></div>
+        </div>
+      </div>`;
+
+    // Partitions
+    if (hasParts && d.children) {
+      h += '<div class="parts">';
+      for (const p of d.children) {
+        const hasNbd = nbdExports.includes(p.name);
+        const hasNfs = p.mountpoint && p.mountpoint.startsWith('/srv/nfs/');
+        h += `<div class="part"><div class="part-left"><span class="part-name">${p.name}</span><span class="part-info">${fmtSz(p.size)} · ${p.fstype||'?'}${p.label?' · '+esc(p.label):''}${p.mountpoint?' → '+esc(p.mountpoint):''}</span></div><div class="badges">${hasNfs?'<span class="badge badge-nfs">NFS</span>':''}${hasNbd?'<span class="badge badge-nbd">NBD</span>':''}</div></div>`;
+      }
+      h += '</div>';
+    } else if (!hasParts && !busy) {
+      h += '<div class="no-parts">No partition table detected</div>';
+    }
+
+    // Active operation
+    for (const op of ops.filter(o => !['queued'].includes(o.status))) {
+      const cls = op.status === 'done' ? 'done' : op.status === 'error' ? 'error' : 'active';
+      h += `<div class="drive-op">
+        <div class="op-row"><span><span class="op-type">${op.type}</span>${op.imageName ? ' · '+esc(op.imageName) : ''}</span>
+        ${cls==='active'?`<button class="btn btn-sm btn-danger" onclick="cancelOp('${op.id}')">Cancel</button>`:''}</div>
+        <div class="op-msg">${esc(op.message)}</div>
+        <div class="op-bar"><div class="op-fill ${cls}" style="width:${op.progress}%"></div></div>
+      </div>`;
+    }
+
+    // Queued operations
+    for (const op of queuedOps) {
+      h += `<div class="op-queued">⏳ ${op.type} queued${op.imageName ? ': '+esc(op.imageName) : ''}</div>`;
+    }
+
+    // Action buttons
+    const isErasing = activeOp?.type === 'erase';
+    const isFlashing = activeOp?.type === 'flash';
+    const hasQueued = queuedOps.length > 0;
+
+    h += '<div class="drive-actions">';
+
+    if (hasParts && !busy) {
+      // Has partitions: show Backup
+      h += `<button class="btn btn-primary" onclick="backupDrive('${d.name}')">Backup</button>`;
+    }
+
+    if (!hasParts && !busy) {
+      // No partitions: show Flash
+      h += `<button class="btn btn-primary" onclick="flashDrive('${d.name}')">Flash</button>`;
+      h += `<button class="btn" onclick="scanDrive('${d.name}')">Scan</button>`;
+    }
+
+    // Optimistic: allow queueing flash during erase
+    if (isErasing && !hasQueued) {
+      h += `<button class="btn btn-primary" onclick="flashDrive('${d.name}')">Flash (queue)</button>`;
+    }
+
+    if (!busy) {
+      h += `<button class="btn btn-warn" onclick="eraseDrive('${d.name}','${esc(d.model||d.name)}',${d.size})">Erase</button>`;
+    }
+
+    // Eject: disabled during any operation
+    h += `<button class="btn" onclick="ejectDrive('${d.name}','${esc(d.model||d.name)}')" ${busy?'disabled':''}>Eject</button>`;
+
+    h += '</div></div>';
+  }
+  el.innerHTML = h;
+}
+
+// ==================== Actions ====================
+async function ejectDrive(dev, model) {
+  if (!await confirm2('Eject Device', 'Unmount and power off this device?', `${model}\n/dev/${dev}`)) return;
+  try {
+    const r = await (await fetch('/api/eject', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device:dev}) })).json();
+    toast(r.message, r.ok?'success':'error');
+  } catch(e) { toast('Eject failed','error'); }
+}
+
+async function eraseDrive(dev, model, size) {
+  const mode = await eraseModal(dev, model, size);
+  if (!mode) return;
+  try {
+    const r = await (await fetch('/api/erase', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device:dev, mode}) })).json();
+    if (!r.ok) toast(r.message, 'error');
+  } catch(e) { toast('Erase failed','error'); }
+}
+
+async function scanDrive(dev) {
+  toast('Scanning...','info');
+  try {
+    const r = await (await fetch('/api/scan', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device:dev}) })).json();
+    toast(r.message, r.ok?'success':'error');
+  } catch(e) { toast('Scan failed','error'); }
+}
+
+async function backupDrive(dev) {
+  toast('Backup coming soon','info');
+}
+
+async function cancelOp(id) {
+  await fetch('/api/cancel', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({operationId:id}) });
+}
+
+function scrollToDrive(name) {
+  const el = document.getElementById('drive-' + name);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.remove('highlight');
+  void el.offsetWidth;
+  el.classList.add('highlight');
+}
+
+// ==================== Flash ====================
+async function flashDrive(dev) {
+  if (!images.length) await loadImages();
+  const result = await flashModal(dev);
+  if (!result) return;
+  try {
+    const r = await (await fetch('/api/flash', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(result) })).json();
+    if (!r.ok) toast(r.message, 'error');
+  } catch(e) { toast('Flash failed','error'); }
+}
+
+async function loadImages() {
+  try {
+    images = await (await fetch('/api/images')).json();
+  } catch { images = []; }
+}
+
+async function loadDefaults() {
+  try {
+    defaults = await (await fetch('/api/defaults')).json();
+  } catch { defaults = {}; }
+}
+
+async function saveDefaults() {
+  const s = readSettingsForm();
+  delete s.password;
+  // Strip wifi passwords from defaults for security
+  if (s.wifiNetworks) s.wifiNetworks = s.wifiNetworks.map(w => ({...w, password: ''}));
+  try {
+    await fetch('/api/defaults', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(s) });
+    toast('Defaults saved','success');
+  } catch { toast('Save failed','error'); }
+}
+
+function readSettingsForm() {
+  // Collect WiFi networks
+  const wifiRows = document.querySelectorAll('.wifi-entry');
+  const wifiNetworks = [];
+  wifiRows.forEach((row, i) => {
+    const ssid = row.querySelector('.wf-ssid')?.value || '';
+    const password = row.querySelector('.wf-pass')?.value || '';
+    const country = row.querySelector('.wf-cc')?.value || 'US';
+    if (ssid) wifiNetworks.push({ ssid, password, country, priority: wifiRows.length - i });
+  });
+
+  // Collect SSH keys
+  const keysRaw = Q('#sf-keys')?.value || '';
+  const sshKeys = keysRaw.split('\n').map(k => k.trim()).filter(k => k.length > 0);
+
+  return {
+    hostname: Q('#sf-host')?.value||'raspberrypi',
+    username: Q('#sf-user')?.value||'pi',
+    password: Q('#sf-pass')?.value||'',
+    enableSsh: Q('#sf-ssh')?.checked??true,
+    sshKeys,
+    wifiNetworks,
+    timezone: Q('#sf-tz')?.value||'UTC',
+    keyboardLayout: Q('#sf-kb')?.value||'us',
+  };
+}
+
+function addWifiRow(ssid, password, country) {
+  const list = Q('#wifi-list');
+  if (!list) return;
+  const div = document.createElement('div');
+  div.className = 'wifi-entry';
+  div.innerHTML = `<input type="text" class="wf-ssid" placeholder="SSID" value="${esc(ssid||'')}">
+    <input type="password" class="wf-pass" placeholder="Password" value="${esc(password||'')}">
+    <input type="text" class="wf-cc" placeholder="CC" value="${esc(country||'US')}" style="width:50px">
+    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()" type="button">&times;</button>`;
+  list.appendChild(div);
+}
+
+// ==================== Modals ====================
+function showModal(html) {
+  Q('#modal').innerHTML = html;
+  Q('#modal-bg').classList.remove('hidden');
+}
+function hideModal() { Q('#modal-bg').classList.add('hidden'); }
+
+function confirm2(title, msg, devInfo) {
+  return new Promise(resolve => {
+    showModal(`<h3>${esc(title)}</h3><p>${esc(msg)}</p><div class="modal-dev">${esc(devInfo).replace(/\n/g,'<br>')}</div>
+      <div class="modal-btns"><button class="btn" id="mc">Cancel</button><button class="btn btn-primary" id="mk">Confirm</button></div>`);
+    Q('#mc').onclick = () => { hideModal(); resolve(false); };
+    Q('#mk').onclick = () => { hideModal(); resolve(true); };
+    Q('#modal-bg').onclick = e => { if(e.target===Q('#modal-bg')){hideModal();resolve(false);} };
+  });
+}
+
+function eraseModal(dev, model, size) {
+  return new Promise(resolve => {
+    showModal(`<h3 style="color:var(--danger)">Erase Device</h3>
+      <p>Permanently destroy all data on:</p>
+      <div class="modal-dev">${esc(model)}<br>/dev/${esc(dev)} · ${fmtSz(size)}</div>
+      <div class="radio-group">
+        <label><input type="radio" name="em" value="quick" checked> <strong>Quick</strong> — clear partition table (instant)</label>
+        <label><input type="radio" name="em" value="full"> <strong>Full</strong> — write zeros (slow)</label>
+        <label><input type="radio" name="em" value="discard"> <strong>Discard</strong> — TRIM for SSDs (fast)</label>
+      </div>
+      <div class="confirm-box"><label>Type ERASE to confirm:</label><input type="text" id="ec" autocomplete="off"></div>
+      <div class="modal-btns"><button class="btn" id="mc">Cancel</button><button class="btn btn-danger" id="mk" disabled>Erase</button></div>`);
+    Q('#ec').addEventListener('input', () => { Q('#mk').disabled = Q('#ec').value !== 'ERASE'; });
+    Q('#ec').focus();
+    Q('#mc').onclick = () => { hideModal(); resolve(null); };
+    Q('#mk').onclick = () => { if(Q('#ec').value!=='ERASE') return; hideModal(); resolve(document.querySelector('input[name="em"]:checked').value); };
+    Q('#modal-bg').onclick = e => { if(e.target===Q('#modal-bg')){hideModal();resolve(null);} };
+  });
+}
+
+function flashModal(dev) {
+  return new Promise(resolve => {
+    let imgOpts = '<option value="">Choose an image...</option>';
+    let lastCat = '';
+    for (let i = 0; i < images.length; i++) {
+      const im = images[i];
+      if (im.category !== lastCat) { if(lastCat) imgOpts+='</optgroup>'; imgOpts+=`<optgroup label="${esc(im.category||'Raspberry Pi OS')}">`;lastCat=im.category; }
+      imgOpts += `<option value="${i}">${esc(im.name)}</option>`;
+    }
+    if(lastCat) imgOpts+='</optgroup>';
+
+    const d = defaults;
+    const savedKeys = Array.isArray(d.sshKeys) ? d.sshKeys.join('\n') : '';
+
+    showModal(`<h3>Flash RPi Image</h3>
+      <div class="flash-form" style="max-height:70vh;overflow-y:auto">
+        <div class="fg"><label>Image</label><select id="sf-img">${imgOpts}</select><div class="img-detail" id="sf-imgd"></div></div>
+        <details><summary>Configure Settings</summary>
+          <div class="settings-grid">
+            <div class="fg"><label>Hostname</label><input type="text" id="sf-host" value="${esc(d.hostname||'raspberrypi')}"></div>
+            <div class="fg"><label>Username</label><input type="text" id="sf-user" value="${esc(d.username||'pi')}"></div>
+            <div class="fg"><label>Password</label><input type="password" id="sf-pass" placeholder="Blank = key-only SSH"></div>
+            <div class="fg"><label>&nbsp;</label><div class="check"><input type="checkbox" id="sf-ssh" ${d.enableSsh!==false?'checked':''}><label for="sf-ssh">Enable SSH</label></div></div>
+            <div class="fg full"><label>SSH Authorized Keys</label><textarea id="sf-keys" rows="3" placeholder="ssh-ed25519 AAAA... user@host (one per line)" style="background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:7px 10px;color:var(--text);font-size:.8rem;font-family:'SF Mono',ui-monospace,monospace;resize:vertical;outline:none;width:100%">${esc(savedKeys)}</textarea></div>
+            <div class="fg full" style="margin-top:8px">
+              <label>WiFi Networks</label>
+              <div id="wifi-list" style="display:flex;flex-direction:column;gap:6px"></div>
+              <button class="btn btn-sm" onclick="addWifiRow('','','US')" type="button" style="margin-top:6px">+ Add WiFi Network</button>
+            </div>
+            <div class="fg"><label>Timezone</label><input type="text" id="sf-tz" value="${esc(d.timezone||'UTC')}"></div>
+            <div class="fg"><label>Keyboard</label><input type="text" id="sf-kb" value="${esc(d.keyboardLayout||'us')}"></div>
+            <div class="fg full" style="justify-content:flex-end"><button class="btn btn-sm" onclick="saveDefaults()" type="button">Save as Default</button></div>
+          </div>
+        </details>
+      </div>
+      <div class="modal-btns"><button class="btn" id="mc">Cancel</button><button class="btn btn-primary" id="mk" disabled>Flash</button></div>`);
+
+    // Populate saved WiFi networks
+    const nets = Array.isArray(d.wifiNetworks) ? d.wifiNetworks : [];
+    for (const w of nets) addWifiRow(w.ssid, w.password||'', w.country||'US');
+    if (nets.length === 0) addWifiRow('','','US');
+
+    Q('#sf-img').addEventListener('change', function() {
+      const idx = parseInt(this.value);
+      Q('#mk').disabled = isNaN(idx);
+      if (!isNaN(idx) && images[idx]) {
+        const im = images[idx];
+        Q('#sf-imgd').textContent = `${(im.description||'').replace(/<[^>]*>/g,'').slice(0,100)} | DL: ${fmtSz(im.downloadSize)} | Size: ${fmtSz(im.extractSize)}`;
+      } else Q('#sf-imgd').textContent = '';
+    });
+
+    Q('#mc').onclick = () => { hideModal(); resolve(null); };
+    Q('#mk').onclick = () => {
+      const idx = parseInt(Q('#sf-img').value);
+      if (isNaN(idx) || !images[idx]) return;
+      const im = images[idx];
+      const settings = readSettingsForm();
+      hideModal();
+      resolve({ imageUrl: im.url, imageName: im.name, extractSize: im.extractSize, device: dev, settings });
+    };
+    Q('#modal-bg').onclick = e => { if(e.target===Q('#modal-bg')){hideModal();resolve(null);} };
+  });
+}
+
+// ==================== Toast ====================
+function toast(msg, type) {
+  const c = Q('#toasts');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type||'info'}`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 5000);
+}
+
+// ==================== Init ====================
+connect();
+loadImages();
+loadDefaults();
+</script>
+</body>
+</html>

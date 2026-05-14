@@ -1,0 +1,15 @@
+[Unit]
+Description=DeskyPi Web Interface
+After=network.target nfs-server.service nbd-server.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/deskypi-web
+ExecStart=/home/pi/.bun/bin/bun run server.ts
+Restart=always
+RestartSec=5
+Environment=PATH=/home/pi/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target
