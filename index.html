@@ -522,7 +522,7 @@ function render() {
       const driveCell = drive
         ? `<span class="adapter-link" onclick="scrollToDrive('${drive.name}')">${drive.name} — ${esc(drive.model || drive.name)} (${fmtSz(drive.size)})</span>`
         : '<span class="adapter-none">No disk</span>';
-      ah += `<tr><td><span class="adapter-name tip-trigger" onmouseenter="showAdapterTip(this,${JSON.stringify(esc(a.name))},${JSON.stringify(a.id)},${JSON.stringify(a.bus)},${JSON.stringify(a.device)})" onmouseleave="hideTip()">${esc(a.name)}</span></td><td class="mono" style="font-size:.72rem;color:var(--dim)">${a.id}</td><td>${driveCell}</td></tr>`;
+      ah += `<tr><td><span class="adapter-name tip-trigger" onmouseenter="showAdapterTip(this,${esc(JSON.stringify(a.name))},${esc(JSON.stringify(a.id))},${esc(JSON.stringify(a.bus))},${esc(JSON.stringify(a.device))})" onmouseleave="hideTip()">${esc(a.name)}</span></td><td class="mono" style="font-size:.72rem;color:var(--dim)">${a.id}</td><td>${driveCell}</td></tr>`;
     }
     ah += '</tbody>';
     Q('#adapter-list').innerHTML = ah;
