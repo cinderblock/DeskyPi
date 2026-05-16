@@ -1,0 +1,12 @@
+# Auto-mount USB partitions for NFS export + NBD export for all USB block devices
+# Partitions (have filesystem): mount + NBD
+SUBSYSTEM=="block", ACTION=="add", ENV{DEVTYPE}=="partition", ENV{ID_USB_DRIVER}!="", \
+  RUN+="/usr/local/bin/nfs-drive-handler.sh add %E{DEVNAME} partition"
+
+# Whole disks: NBD only (no mount)
+SUBSYSTEM=="block", ACTION=="add", ENV{DEVTYPE}=="disk", ENV{ID_USB_DRIVER}!="", \
+  RUN+="/usr/local/bin/nfs-drive-handler.sh add %E{DEVNAME} disk"
+
+# Remove: both types
+SUBSYSTEM=="block", ACTION=="remove", ENV{ID_USB_DRIVER}!="", \
+  RUN+="/usr/local/bin/nfs-drive-handler.sh remove %E{DEVNAME} %E{DEVTYPE}"
