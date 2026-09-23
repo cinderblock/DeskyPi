@@ -333,7 +333,7 @@ async function getStatus() {
 
 interface Operation {
   id: string;
-  type: "erase" | "flash";
+  type: "erase" | "flash" | "deepscan";
   device: string;
   status: string;
   progress: number;
@@ -343,6 +343,7 @@ interface Operation {
   imageName?: string;
   extractSize?: number;
   settings?: any;
+  scanResult?: any;
   process?: ReturnType<typeof Bun.spawn>;
   aborted?: boolean;
 }
@@ -350,7 +351,7 @@ interface Operation {
 const deviceOps = new Map<string, Operation[]>();
 
 function opPublic(o: Operation) {
-  return { id: o.id, type: o.type, device: o.device, status: o.status, progress: o.progress, message: o.message, imageName: o.imageName };
+  return { id: o.id, type: o.type, device: o.device, status: o.status, progress: o.progress, message: o.message, imageName: o.imageName, scanResult: o.scanResult };
 }
 
 function getOpsForDevice(device: string): Operation[] {
@@ -389,6 +390,7 @@ async function execOp(op: Operation): Promise<void> {
   try {
     if (op.type === "erase") await doErase(op);
     else if (op.type === "flash") await doFlash(op);
+    else if (op.type === "deepscan") await doDeepScan(op);
   } catch (e: any) {
     if (op.status !== "error") {
       op.status = "error";
@@ -482,6 +484,307 @@ async function scanDevice(devName: string): Promise<{ ok: boolean; message: stri
   } catch {
     return { ok: false, message: "Scan failed" };
   }
+}
+
+// ==================== Raw Sector Probe ====================
+//
+// A filesystem that reports "empty" says nothing about what is still on the platter.
+// These helpers read the block device directly, so a quick-erased or freshly-formatted
+// drive still reveals whatever the previous image left behind.
+
+const PROBE_BLOCK = 4096;
+
+// Deep-scan findings, kept per device so they outlive the operation record.
+const lastScanResults = new Map<string, any>();
+
+interface Signature {
+  name: string;
+  bytes: number[];
+  at?: number; // required offset within the sampled block; otherwise matched anywhere
+}
+
+// Ordered roughly by how much they tell you. `at` entries are filesystem/container
+// headers that only mean anything at a fixed offset, which keeps false positives down.
+const SIGNATURES: Signature[] = [
+  { name: "MBR partition table", bytes: [0x55, 0xaa], at: 510 },
+  { name: "GPT header", bytes: [0x45, 0x46, 0x49, 0x20, 0x50, 0x41, 0x52, 0x54] },
+  { name: "ext2/3/4 superblock", bytes: [0x53, 0xef], at: 0x438 },
+  { name: "FAT32", bytes: [0x46, 0x41, 0x54, 0x33, 0x32], at: 0x52 },
+  { name: "FAT12/16", bytes: [0x46, 0x41, 0x54, 0x31], at: 0x36 },
+  { name: "NTFS", bytes: [0x4e, 0x54, 0x46, 0x53, 0x20, 0x20, 0x20, 0x20], at: 3 },
+  { name: "exFAT", bytes: [0x45, 0x58, 0x46, 0x41, 0x54, 0x20, 0x20, 0x20], at: 3 },
+  { name: "LUKS volume", bytes: [0x4c, 0x55, 0x4b, 0x53, 0xba, 0xbe] },
+  { name: "squashfs", bytes: [0x68, 0x73, 0x71, 0x73] },
+  { name: "Linux swap", bytes: [0x53, 0x57, 0x41, 0x50, 0x53, 0x50, 0x41, 0x43, 0x45, 0x32] },
+  { name: "arm64 kernel Image", bytes: [0x41, 0x52, 0x4d, 0x64], at: 0x38 },
+  { name: "devicetree blob", bytes: [0xd0, 0x0d, 0xfe, 0xed] },
+  { name: "ELF binary", bytes: [0x7f, 0x45, 0x4c, 0x46] },
+  { name: "SQLite database", bytes: [0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00] },
+  { name: "JPEG", bytes: [0xff, 0xd8, 0xff] },
+  { name: "PNG", bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { name: "GIF", bytes: [0x47, 0x49, 0x46, 0x38] },
+  { name: "PDF", bytes: [0x25, 0x50, 0x44, 0x46, 0x2d] },
+  { name: "ZIP / Office / jar", bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { name: "gzip", bytes: [0x1f, 0x8b, 0x08] },
+  { name: "xz", bytes: [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00] },
+  { name: "bzip2", bytes: [0x42, 0x5a, 0x68] },
+  { name: "zstd", bytes: [0x28, 0xb5, 0x2f, 0xfd] },
+  { name: "7-zip", bytes: [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c] },
+  { name: "tar archive", bytes: [0x75, 0x73, 0x74, 0x61, 0x72], at: 257 },
+  { name: "MP4 / MOV", bytes: [0x66, 0x74, 0x79, 0x70], at: 4 },
+  { name: "Matroska / WebM", bytes: [0x1a, 0x45, 0xdf, 0xa3] },
+  { name: "RIFF (wav/avi)", bytes: [0x52, 0x49, 0x46, 0x46] },
+  { name: "Ogg", bytes: [0x4f, 0x67, 0x67, 0x53] },
+  { name: "FLAC", bytes: [0x66, 0x4c, 0x61, 0x43] },
+  { name: "MP3 (ID3)", bytes: [0x49, 0x44, 0x33] },
+];
+
+const MAX_SIG_LEN = Math.max(...SIGNATURES.map((s) => s.bytes.length));
+
+function matchesAt(buf: Uint8Array, pos: number, bytes: number[]): boolean {
+  if (pos + bytes.length > buf.length) return false;
+  for (let i = 0; i < bytes.length; i++) if (buf[pos + i] !== bytes[i]) return false;
+  return true;
+}
+
+// Returns absolute byte offsets of every signature hit in `buf`, which starts at `base`.
+function findSignatures(buf: Uint8Array, base: number): { name: string; offset: number }[] {
+  const hits: { name: string; offset: number }[] = [];
+  for (const sig of SIGNATURES) {
+    if (sig.at !== undefined) {
+      // Anchored: only meaningful at a fixed offset within each block-aligned unit.
+      // Alignment is relative to the device, not the buffer — in the deep scan `base`
+      // is offset by the carry-over overlap and is not itself block-aligned.
+      const firstBlk = Math.ceil(base / PROBE_BLOCK) * PROBE_BLOCK;
+      for (let abs = firstBlk; abs - base + sig.at + sig.bytes.length <= buf.length; abs += PROBE_BLOCK) {
+        if (matchesAt(buf, abs - base + sig.at, sig.bytes)) hits.push({ name: sig.name, offset: abs });
+      }
+    } else {
+      const first = sig.bytes[0];
+      for (let i = 0; i < buf.length; i++) {
+        if (buf[i] === first && matchesAt(buf, i, sig.bytes)) hits.push({ name: sig.name, offset: base + i });
+      }
+    }
+  }
+  return hits;
+}
+
+type BlockKind = "zero" | "ones" | "text" | "compressed" | "structured";
+
+interface BlockReading {
+  offset: number;
+  kind: BlockKind;
+  entropy: number;
+  signatures: string[];
+}
+
+// Shannon entropy in bits/byte. ~0 = uniform fill, ~8 = compressed or encrypted.
+function classifyBlock(buf: Uint8Array, offset: number): BlockReading {
+  const freq = new Uint32Array(256);
+  let zeros = 0, ones = 0, printable = 0;
+  for (const b of buf) {
+    freq[b]++;
+    if (b === 0x00) zeros++;
+    else if (b === 0xff) ones++;
+    if ((b >= 0x20 && b < 0x7f) || b === 0x09 || b === 0x0a || b === 0x0d) printable++;
+  }
+  const n = buf.length || 1;
+  let entropy = 0;
+  for (const f of freq) {
+    if (!f) continue;
+    const p = f / n;
+    entropy -= p * Math.log2(p);
+  }
+
+  let kind: BlockKind;
+  if (zeros === n) kind = "zero";
+  else if (ones === n) kind = "ones";
+  else if (printable / n > 0.85) kind = "text";
+  else if (entropy >= 7.5) kind = "compressed";
+  else kind = "structured";
+
+  const signatures = [...new Set(findSignatures(buf, 0).map((h) => h.name))];
+  return { offset, kind, entropy: Math.round(entropy * 100) / 100, signatures };
+}
+
+async function getDeviceSizeBytes(devName: string): Promise<number> {
+  const sectors = parseInt(await readSysFile(`/sys/block/${devName}/size`)) || 0;
+  return sectors * 512;
+}
+
+// Byte ranges NOT covered by any declared partition — where leftovers hide.
+async function getUnallocatedRanges(devName: string, total: number): Promise<{ start: number; end: number }[]> {
+  const { out } = await run(["sudo", "sfdisk", "-J", `/dev/${devName}`]);
+  let used: { start: number; end: number }[] = [];
+  try {
+    const pt = JSON.parse(out).partitiontable;
+    const ss = pt?.sectorsize || 512;
+    used = (pt?.partitions || [])
+      .map((p: any) => ({ start: p.start * ss, end: (p.start + p.size) * ss }))
+      .sort((a: any, b: any) => a.start - b.start);
+  } catch {
+    // No partition table at all — the whole device is "unallocated".
+    return total > 0 ? [{ start: 0, end: total }] : [];
+  }
+  const gaps: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const u of used) {
+    if (u.start > cursor) gaps.push({ start: cursor, end: u.start });
+    cursor = Math.max(cursor, u.end);
+  }
+  if (cursor < total) gaps.push({ start: cursor, end: total });
+  return gaps.filter((g) => g.end - g.start >= PROBE_BLOCK);
+}
+
+// One sudo, many seeks — 250 separate `sudo dd` calls would spend most of the time in sudo.
+async function readBlocks(devName: string, blockIndexes: number[]): Promise<Uint8Array[]> {
+  if (blockIndexes.length === 0) return [];
+  const script = blockIndexes
+    .map((i) => `dd if=/dev/${devName} bs=${PROBE_BLOCK} count=1 skip=${i} status=none 2>/dev/null`)
+    .join("; ");
+  const proc = Bun.spawn(["sudo", "sh", "-c", script], { stdout: "pipe", stderr: "pipe" });
+  const all = new Uint8Array(await new Response(proc.stdout).arrayBuffer());
+  await proc.exited;
+  const out: Uint8Array[] = [];
+  for (let i = 0; i < blockIndexes.length; i++) {
+    const s = i * PROBE_BLOCK;
+    if (s >= all.length) break;
+    out.push(all.subarray(s, Math.min(s + PROBE_BLOCK, all.length)));
+  }
+  return out;
+}
+
+function spreadBlocks(start: number, end: number, count: number): number[] {
+  const first = Math.floor(start / PROBE_BLOCK);
+  const last = Math.floor((end - PROBE_BLOCK) / PROBE_BLOCK);
+  if (last < first) return [];
+  const span = last - first;
+  const n = Math.min(count, span + 1);
+  if (n <= 1) return [first];
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(first + Math.round((span * i) / (n - 1)));
+  return [...new Set(out)];
+}
+
+// Fast sampled read — seconds, not minutes. Gives a feel for what is actually on the
+// device without committing to a full pass.
+async function probeDevice(devName: string): Promise<any> {
+  if (isSysDev(devName)) return { ok: false, message: "Cannot probe system device" };
+  const total = await getDeviceSizeBytes(devName);
+  if (!total) return { ok: false, message: "Could not determine device size" };
+
+  const gaps = await getUnallocatedRanges(devName, total);
+
+  // Uniform sweep across the whole device, plus a denser look at the unallocated gaps
+  // and at the head/tail where partition tables and stale superblocks live.
+  const plan = new Set<number>(spreadBlocks(0, total, 192));
+  for (const g of gaps) for (const b of spreadBlocks(g.start, g.end, 48)) plan.add(b);
+  for (const b of spreadBlocks(0, Math.min(1024 * 1024, total), 16)) plan.add(b);
+  for (const b of spreadBlocks(Math.max(0, total - 1024 * 1024), total, 16)) plan.add(b);
+
+  const indexes = [...plan].sort((a, b) => a - b);
+  const blocks = await readBlocks(devName, indexes);
+  const readings: BlockReading[] = blocks.map((b, i) => classifyBlock(b, indexes[i] * PROBE_BLOCK));
+
+  const counts: Record<BlockKind, number> = { zero: 0, ones: 0, text: 0, compressed: 0, structured: 0 };
+  for (const r of readings) counts[r.kind]++;
+
+  const sigMap = new Map<string, number[]>();
+  for (const r of readings) {
+    for (const name of r.signatures) {
+      const list = sigMap.get(name) || [];
+      if (list.length < 8) list.push(r.offset);
+      sigMap.set(name, list);
+    }
+  }
+
+  const sampled = readings.length || 1;
+  const emptyPct = Math.round(((counts.zero + counts.ones) / sampled) * 100);
+  const inGaps = readings.filter((r) => gaps.some((g) => r.offset >= g.start && r.offset < g.end));
+  const gapsWithData = inGaps.filter((r) => r.kind !== "zero" && r.kind !== "ones").length;
+
+  return {
+    ok: true,
+    device: devName,
+    sizeBytes: total,
+    sampledBlocks: sampled,
+    blockSize: PROBE_BLOCK,
+    bytesRead: sampled * PROBE_BLOCK,
+    counts,
+    emptyPct,
+    unallocated: {
+      ranges: gaps.map((g) => ({ start: g.start, end: g.end, bytes: g.end - g.start })),
+      sampled: inGaps.length,
+      withData: gapsWithData,
+    },
+    signatures: [...sigMap.entries()].map(([name, offsets]) => ({ name, offsets })),
+    // Coarse strip for the UI: kind per sample, in device order.
+    map: readings.map((r) => ({ o: r.offset, k: r.kind, e: r.entropy })),
+    message:
+      `Sampled ${sampled} blocks (${fmtBytes(sampled * PROBE_BLOCK)}) — ` +
+      `${emptyPct}% empty` +
+      (gapsWithData ? `, ${gapsWithData} block(s) with data outside any partition` : "") +
+      (sigMap.size ? `, ${sigMap.size} signature type(s) found` : ""),
+  };
+}
+
+// Exhaustive pass. Runs as a tracked Operation so it reports progress over SSE and can
+// be cancelled like an erase or a flash.
+async function doDeepScan(op: Operation): Promise<void> {
+  const dev = op.device;
+  const total = await getDeviceSizeBytes(dev);
+  op.status = "scanning";
+  op.progress = 0;
+  op.message = "Scanning raw device...";
+
+  const proc = Bun.spawn(["sudo", "dd", `if=/dev/${dev}`, "bs=4M", "status=none"], { stdout: "pipe", stderr: "pipe" });
+  op.process = proc;
+
+  const hits = new Map<string, { count: number; first: number[] }>();
+  let pos = 0;
+  let carry = new Uint8Array(0);
+
+  for await (const chunk of proc.stdout) {
+    if (op.aborted) { proc.kill(); break; }
+    const buf = new Uint8Array(carry.length + chunk.length);
+    buf.set(carry, 0);
+    buf.set(chunk, carry.length);
+    const base = pos - carry.length;
+
+    // Anything starting inside the trailing overlap is deferred to the next chunk, so a
+    // signature straddling a chunk boundary is found exactly once.
+    const carryLen = Math.min(buf.length, MAX_SIG_LEN - 1);
+    const boundary = base + buf.length - carryLen;
+    for (const h of findSignatures(buf, base)) {
+      if (h.offset >= boundary) continue;
+      const e = hits.get(h.name) || { count: 0, first: [] };
+      e.count++;
+      if (e.first.length < 10) e.first.push(h.offset);
+      hits.set(h.name, e);
+    }
+
+    pos += chunk.length;
+    carry = new Uint8Array(buf.subarray(buf.length - carryLen));
+    op.progress = total ? Math.min(99, Math.round((pos / total) * 100)) : 0;
+    op.message = `Scanned ${fmtBytes(pos)}${total ? ` / ${fmtBytes(total)}` : ""} — ${hits.size} signature type(s)`;
+  }
+
+  await proc.exited;
+  if (op.aborted) throw new Error("Cancelled");
+
+  op.scanResult = {
+    bytesScanned: pos,
+    signatures: [...hits.entries()]
+      .map(([name, v]) => ({ name, count: v.count, first: v.first }))
+      .sort((a, b) => b.count - a.count),
+  };
+  // Operations are reaped 30s after completion; keep the findings retrievable after that.
+  lastScanResults.set(dev, { ...op.scanResult, device: dev, at: Date.now() });
+  op.progress = 100;
+  op.status = "done";
+  op.message = hits.size
+    ? `Found ${hits.size} signature type(s) in ${fmtBytes(pos)}`
+    : `No known signatures in ${fmtBytes(pos)} — device looks genuinely blank`;
 }
 
 // ==================== Erase ====================
@@ -792,6 +1095,9 @@ const API_DOCS = {
     "POST /api/erase": { body: { device: "sdb", mode: "quick|full|discard" }, description: "Erase device. Returns immediately; track via SSE. Queueable before flash." },
     "POST /api/flash": { body: { imageUrl: "https://...", extractSize: 0, device: "sdb", settings: {} }, description: "Flash RPi image. Can queue after erase." },
     "POST /api/scan": { body: { device: "sdb" }, description: "Re-read partition table and identify contents" },
+    "POST /api/probe": { body: { device: "sdb" }, description: "Fast sampled raw-sector probe. Reads ~1MB spread across the device (denser in unallocated gaps), classifies each block as zero/ones/text/compressed/structured and reports file signatures. Seconds." },
+    "POST /api/deepscan": { body: { device: "sdb" }, description: "Exhaustive raw scan for file signatures across the whole device. Tracked like erase/flash: progress via SSE, cancellable." },
+    "GET /api/scanresult?device=sdb": "Findings from the last deep scan of a device",
     "POST /api/cancel": { body: { operationId: "uuid" }, description: "Cancel active operation" },
     "GET /api/images": "Official RPi OS image catalog (cached 1hr)",
     "GET /api/defaults": "Saved default flash settings",
@@ -861,6 +1167,27 @@ Bun.serve({
       const { device } = await req.json();
       if (!device || isSysDev(device)) return Response.json({ ok: false, message: "Invalid device" }, { status: 400 });
       return Response.json(await scanDevice(device));
+    }
+
+    if (p === "/api/probe" && req.method === "POST") {
+      const { device } = await req.json();
+      if (!device || isSysDev(device)) return Response.json({ ok: false, message: "Invalid device" }, { status: 400 });
+      return Response.json(await probeDevice(device));
+    }
+
+    if (p === "/api/deepscan" && req.method === "POST") {
+      const { device } = await req.json();
+      if (!device || isSysDev(device)) return Response.json({ ok: false, message: "Invalid device" }, { status: 400 });
+      if (isDeviceBusy(device)) return Response.json({ ok: false, message: "Device busy" }, { status: 409 });
+      const op: Operation = { id: crypto.randomUUID(), type: "deepscan", device, status: "starting", progress: 0, message: "Starting..." };
+      enqueue(op);
+      return Response.json({ ok: true, message: "Deep scan started", operationId: op.id });
+    }
+
+    if (p === "/api/scanresult") {
+      const device = url.searchParams.get("device") || "";
+      const r = lastScanResults.get(device);
+      return Response.json(r ? { ok: true, ...r } : { ok: false, message: "No deep scan result for this device" });
     }
 
     if (p === "/api/cancel" && req.method === "POST") {

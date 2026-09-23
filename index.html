@@ -636,6 +636,12 @@ function renderDrives(drives, nbdExports) {
       h += `<button class="btn btn-primary" onclick="flashDrive('${d.name}')">Flash (queue)</button>`;
     }
 
+    // Raw-sector inspection: useful whether or not a filesystem claims to be empty
+    if (!busy) {
+      h += `<button class="btn" onclick="probeDrive('${d.name}')" title="Sample raw sectors across the device — fast">Probe</button>`;
+      h += `<button class="btn" onclick="deepScanDrive('${d.name}','${esc(d.model||d.name)}',${d.size})" title="Read the whole device looking for file signatures">Deep Scan</button>`;
+    }
+
     if (!busy) {
       h += `<button class="btn btn-warn" onclick="eraseDrive('${d.name}','${esc(d.model||d.name)}',${d.size})">Erase</button>`;
     }
@@ -646,6 +652,7 @@ function renderDrives(drives, nbdExports) {
     h += '</div></div>';
   }
   el.innerHTML = h;
+  checkScanResults(drives);
 }
 
 // ==================== Actions ====================
@@ -676,6 +683,136 @@ async function scanDrive(dev) {
 
 async function backupDrive(dev) {
   toast('Backup coming soon','info');
+}
+
+// ==================== Raw Sector Inspection ====================
+// A filesystem reporting "empty" says nothing about what is still on the media.
+// Probe samples raw blocks; Deep Scan reads everything.
+
+const KIND_COLORS = {
+  zero:       { c:'#39404f', label:'zeroed' },
+  ones:       { c:'#7a5c2e', label:'0xFF (erased flash)' },
+  text:       { c:'#4ea1ff', label:'text' },
+  compressed: { c:'#ff9f43', label:'compressed / encrypted' },
+  structured: { c:'#5ad18c', label:'structured data' },
+};
+
+async function probeDrive(dev) {
+  toast('Sampling raw sectors...','info');
+  try {
+    const r = await (await fetch('/api/probe', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device:dev}) })).json();
+    if (!r.ok) { toast(r.message || 'Probe failed', 'error'); return; }
+    showProbeModal(r);
+  } catch(e) { toast('Probe failed','error'); }
+}
+
+function showProbeModal(r) {
+  const total = r.sampledBlocks || 1;
+  const bar = Object.entries(KIND_COLORS).map(([k,v]) => {
+    const n = r.counts[k] || 0;
+    if (!n) return '';
+    return `<div style="width:${(n/total*100).toFixed(2)}%;background:${v.c}" title="${v.label}: ${n} block(s)"></div>`;
+  }).join('');
+
+  const legend = Object.entries(KIND_COLORS).filter(([k]) => r.counts[k]).map(([k,v]) =>
+    `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;white-space:nowrap">
+       <i style="width:9px;height:9px;border-radius:2px;background:${v.c};display:inline-block"></i>
+       ${esc(v.label)} <b>${((r.counts[k]/total)*100).toFixed(0)}%</b></span>`).join('');
+
+  // Device-order strip: each sample in place, so clusters of data are visible.
+  const strip = r.map.map(m =>
+    `<i style="flex:1;min-width:1px;background:${KIND_COLORS[m.k]?.c || '#555'}"
+        title="${fmtSz(m.o)} — ${esc(KIND_COLORS[m.k]?.label || m.k)}, entropy ${m.e}"></i>`).join('');
+
+  const gaps = r.unallocated || { ranges:[], sampled:0, withData:0 };
+  const gapBytes = gaps.ranges.reduce((a,g) => a + g.bytes, 0);
+  const gapWarn = gaps.withData > 0;
+
+  let sigHtml;
+  if (!r.signatures.length) {
+    sigHtml = `<div style="color:var(--dim);font-size:.8rem">No known file signatures in the sampled blocks.</div>`;
+  } else {
+    sigHtml = `<div style="display:flex;flex-direction:column;gap:4px">` + r.signatures.map(s =>
+      `<div style="display:flex;justify-content:space-between;gap:10px;font-size:.78rem">
+         <span>${esc(s.name)}</span>
+         <span style="color:var(--dim);font-family:monospace">${s.offsets.slice(0,4).map(o=>fmtSz(o)).join(', ')}${s.offsets.length>4?' …':''}</span>
+       </div>`).join('') + `</div>`;
+  }
+
+  showModal(`<h3>Raw Probe — /dev/${esc(r.device)}</h3>
+    <p style="font-size:.8rem;color:var(--dim);margin-top:-4px">
+      Sampled ${r.sampledBlocks} blocks (${fmtSz(r.bytesRead)}) across ${fmtSz(r.sizeBytes)} —
+      <b style="color:var(--fg)">${r.emptyPct}% empty</b>
+    </p>
+
+    <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;margin:10px 0 6px">${bar}</div>
+    <div style="font-size:.72rem;color:var(--dim);margin-bottom:12px">${legend}</div>
+
+    <div style="font-size:.72rem;color:var(--dim);margin-bottom:3px">Layout (start → end of device)</div>
+    <div style="display:flex;height:22px;gap:1px;border-radius:3px;overflow:hidden;margin-bottom:12px">${strip}</div>
+
+    <div style="font-size:.78rem;margin-bottom:10px;padding:8px 10px;border-radius:5px;
+                background:${gapWarn?'rgba(255,159,67,.12)':'rgba(255,255,255,.04)'}">
+      <b>Outside any partition:</b> ${gaps.ranges.length} region(s), ${fmtSz(gapBytes)} —
+      ${gaps.sampled} block(s) sampled,
+      <b style="color:${gapWarn?'#ff9f43':'inherit'}">${gaps.withData} with data</b>
+      ${gapWarn ? '<div style="color:var(--dim);margin-top:3px">Leftover content from a previous image is still readable here.</div>' : ''}
+    </div>
+
+    <div style="font-size:.72rem;color:var(--dim);margin-bottom:3px">Signatures found</div>
+    ${sigHtml}
+
+    <div class="modal-btns" style="margin-top:14px">
+      <button class="btn" id="mc">Close</button>
+      <button class="btn btn-primary" id="mk">Deep Scan</button>
+    </div>`);
+  Q('#mc').onclick = hideModal;
+  Q('#mk').onclick = () => { hideModal(); deepScanDrive(r.device, r.device, r.sizeBytes); };
+  Q('#modal-bg').onclick = e => { if (e.target === Q('#modal-bg')) hideModal(); };
+}
+
+async function deepScanDrive(dev, model, size) {
+  if (!await confirm2('Deep Scan',
+      'Read the entire device looking for file signatures? Read-only, but it takes roughly as long as a full read.',
+      `${model}\n/dev/${dev} · ${fmtSz(size)}`)) return;
+  try {
+    const r = await (await fetch('/api/deepscan', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device:dev}) })).json();
+    toast(r.message, r.ok?'info':'error');
+  } catch(e) { toast('Deep scan failed','error'); }
+}
+
+// Deep scan results arrive on the op via SSE; show each one once, when it completes.
+const shownScans = new Set();
+
+function checkScanResults(drives) {
+  for (const d of drives) {
+    for (const o of (d.operations || [])) {
+      if (o.type === 'deepscan' && o.status === 'done' && o.scanResult && !shownScans.has(o.id)) {
+        shownScans.add(o.id);
+        showScanModal(d.name, o.scanResult);
+      }
+    }
+  }
+}
+
+function showScanModal(dev, res) {
+  const rows = res.signatures.length
+    ? res.signatures.map(s =>
+        `<div style="display:flex;justify-content:space-between;gap:10px;font-size:.78rem;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+           <span>${esc(s.name)}</span>
+           <span style="color:var(--dim);white-space:nowrap"><b style="color:var(--fg)">${s.count}</b> ·
+             <span style="font-family:monospace">${s.first.slice(0,3).map(o=>fmtSz(o)).join(', ')}${s.first.length>3?' …':''}</span></span>
+         </div>`).join('')
+    : `<div style="color:var(--dim);font-size:.8rem">No known file signatures anywhere on the device — it really is blank.</div>`;
+
+  showModal(`<h3>Deep Scan — /dev/${esc(dev)}</h3>
+    <p style="font-size:.8rem;color:var(--dim);margin-top:-4px">
+      Read ${fmtSz(res.bytesScanned)} · ${res.signatures.length} signature type(s)
+    </p>
+    <div style="max-height:min(50vh,420px);overflow:auto;margin-top:10px">${rows}</div>
+    <div class="modal-btns" style="margin-top:14px"><button class="btn btn-primary" id="mk">Close</button></div>`);
+  Q('#mk').onclick = hideModal;
+  Q('#modal-bg').onclick = e => { if (e.target === Q('#modal-bg')) hideModal(); };
 }
 
 async function cancelOp(id) {
