@@ -809,7 +809,7 @@ const API_DOCS = {
 const htmlFile = Bun.file(import.meta.dir + "/index.html");
 
 Bun.serve({
-  port: PORT, hostname: "0.0.0.0",
+  port: PORT, hostname: "::",
   async fetch(req) {
     const url = new URL(req.url);
     const p = url.pathname;
@@ -881,4 +881,4 @@ Bun.serve({
   },
 });
 
-console.log(`DeskyPi running on http://0.0.0.0:${PORT}`);
+console.log(`DeskyPi running on http://[::]:${PORT} (dual-stack: IPv6 + IPv4)`);
