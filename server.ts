@@ -699,7 +699,10 @@ async function probeDevice(devName: string): Promise<any> {
   }
 
   const sampled = readings.length || 1;
-  const emptyPct = Math.round(((counts.zero + counts.ones) / sampled) * 100);
+  const emptyBlocks = counts.zero + counts.ones;
+  // Never round up to 100% while any sampled block still holds data — "100% empty"
+  // next to "1 block with data" is worse than useless.
+  const emptyPct = emptyBlocks === sampled ? 100 : Math.min(99, Math.round((emptyBlocks / sampled) * 100));
   const inGaps = readings.filter((r) => gaps.some((g) => r.offset >= g.start && r.offset < g.end));
   const gapsWithData = inGaps.filter((r) => r.kind !== "zero" && r.kind !== "ones").length;
 
