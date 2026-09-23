@@ -318,7 +318,10 @@ async function getStatus() {
     hostname,
     uptime: parseFloat(uptimeStr.split(" ")[0]) || 0,
     timestamp: Date.now(),
-    uiVersion: (await getUi()).version,
+    buildVersion: (await getBuild()).version,
+    // Alias kept so dashboards still open from the previous deploy — which compare
+    // `uiVersion` — see the change and reload themselves once.
+    uiVersion: (await getBuild()).version,
     system,
     network,
     rootDevice,
@@ -1116,27 +1119,39 @@ const API_DOCS = {
 
 // ==================== HTTP Server ====================
 
-// ==================== UI Versioning ====================
+// ==================== Build Versioning ====================
 //
 // The dashboard is a long-lived page held open for hours, so a deploy would otherwise
-// leave a stale UI talking to a newer backend. The version is a hash of index.html
-// itself, substituted into the page at serve time — so a client always knows exactly
-// which build it is running, rather than inferring it from the first status message it
-// happens to see (which would be the *new* version for anyone connecting mid-deploy).
+// leave a stale UI talking to a newer backend. The version is substituted into the page
+// at serve time, so a client always knows exactly which build it is running, rather than
+// inferring it from the first status message it happens to see (which would be the *new*
+// version for anyone connecting mid-deploy).
+//
+// It hashes every file whose content defines the running app, not just index.html: a
+// server.ts-only deploy leaves index.html byte-identical, so hashing the page alone would
+// let an open dashboard keep talking to a changed API forever.
 
 const UI_PATH = import.meta.dir + "/index.html";
-let uiCache: { mtimeMs: number; size: number; version: string; html: string } | null = null;
 
-async function getUi(): Promise<{ version: string; html: string }> {
-  const f = Bun.file(UI_PATH);
-  const mtimeMs = f.lastModified;
-  const size = f.size;
-  if (!uiCache || uiCache.mtimeMs !== mtimeMs || uiCache.size !== size) {
-    const raw = await f.text();
-    const version = Bun.hash(raw).toString(16);
-    uiCache = { mtimeMs, size, version, html: raw.replaceAll("__UI_VERSION__", version) };
+// UI_PATH must stay first — getBuild() serves texts[0] as the page.
+// defaults.json is deliberately excluded: it is user data, rewritten every time flash
+// settings are saved, and would cause a spurious reload on each save.
+const BUILD_FILES = [UI_PATH, import.meta.dir + "/server.ts"];
+
+let buildCache: { stamp: string; version: string; html: string } | null = null;
+
+async function getBuild(): Promise<{ version: string; html: string }> {
+  const files = BUILD_FILES.map((p) => Bun.file(p));
+  // Cheap staleness check so a git pull is picked up without a restart.
+  const stamp = files.map((f) => `${f.lastModified}:${f.size}`).join("|");
+  if (!buildCache || buildCache.stamp !== stamp) {
+    const texts = await Promise.all(files.map((f) => f.text().catch(() => "")));
+    // Hash the sources as stored, before substitution, so the value is stable rather
+    // than self-referential.
+    const version = Bun.hash(texts.join(" ")).toString(16);
+    buildCache = { stamp, version, html: texts[0].replaceAll("__BUILD_VERSION__", version) };
   }
-  return uiCache;
+  return buildCache;
 }
 
 Bun.serve({
@@ -1148,7 +1163,7 @@ Bun.serve({
     // no-cache (revalidate every load), not no-store — otherwise a deploy is invisible
     // until the user knows to hard-refresh. The ETag keeps revalidation cheap.
     if (p === "/" || p === "/index.html") {
-      const ui = await getUi();
+      const ui = await getBuild();
       const etag = `"${ui.version}"`;
       const headers = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache", ETag: etag };
       if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });

@@ -355,18 +355,20 @@ function showAdapterTip(el, name, id, bus, dev) {
   showTip(el, h);
 }
 
-// ==================== UI Version / Auto-Reload ====================
+// ==================== Build Version / Auto-Reload ====================
 // The dashboard is left open for hours, so a deploy would otherwise leave a stale page
-// talking to a newer backend. The server substitutes a hash of index.html into the page
-// below and reports the current one in every status message.
-const MY_UI_VERSION = '__UI_VERSION__';
+// talking to a newer backend. The server stamps the page below with a hash covering
+// every file that defines the build — index.html AND server.ts, since a server-only
+// deploy changes the API without changing a byte of this page — and reports the current
+// one in every status message.
+const MY_BUILD_VERSION = '__BUILD_VERSION__';
 let pendingReload = false;
 
-function checkUiVersion(serverVersion) {
+function checkBuildVersion(serverVersion) {
   if (!serverVersion || pendingReload) return;
   // An unsubstituted placeholder means an older backend that doesn't stamp the page.
-  if (MY_UI_VERSION.startsWith('__UI_')) return;
-  if (serverVersion === MY_UI_VERSION) return;
+  if (MY_BUILD_VERSION.startsWith('__BUILD_')) return;
+  if (serverVersion === MY_BUILD_VERSION) return;
   pendingReload = true;
   maybeReload();
 }
@@ -386,7 +388,7 @@ function connect() {
   es = new EventSource('/api/events');
   Q('#dot').className = 'dot';
   let seeded = false;
-  es.onmessage = e => { S = JSON.parse(e.data); if (!seeded && S.history) { seedHist(S.history); seeded = true; } checkUiVersion(S.uiVersion); render(); };
+  es.onmessage = e => { S = JSON.parse(e.data); if (!seeded && S.history) { seedHist(S.history); seeded = true; } checkBuildVersion(S.buildVersion); render(); };
   es.onerror = () => { Q('#dot').className = 'dot off'; es.close(); setTimeout(connect, 3000); };
 }
 
