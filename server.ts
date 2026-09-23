@@ -1123,7 +1123,9 @@ Bun.serve({
     const url = new URL(req.url);
     const p = url.pathname;
 
-    if (p === "/" || p === "/index.html") return new Response(htmlFile, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    // no-cache (revalidate every load), not no-store — otherwise a deploy is invisible
+    // until the user knows to hard-refresh.
+    if (p === "/" || p === "/index.html") return new Response(htmlFile, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" } });
     if (p === "/api" || p === "/api/") return Response.json(API_DOCS);
     if (p === "/api/status") return Response.json(await getStatus());
 
