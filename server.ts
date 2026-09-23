@@ -318,6 +318,7 @@ async function getStatus() {
     hostname,
     uptime: parseFloat(uptimeStr.split(" ")[0]) || 0,
     timestamp: Date.now(),
+    uiVersion: (await getUi()).version,
     system,
     network,
     rootDevice,
@@ -1115,7 +1116,28 @@ const API_DOCS = {
 
 // ==================== HTTP Server ====================
 
-const htmlFile = Bun.file(import.meta.dir + "/index.html");
+// ==================== UI Versioning ====================
+//
+// The dashboard is a long-lived page held open for hours, so a deploy would otherwise
+// leave a stale UI talking to a newer backend. The version is a hash of index.html
+// itself, substituted into the page at serve time — so a client always knows exactly
+// which build it is running, rather than inferring it from the first status message it
+// happens to see (which would be the *new* version for anyone connecting mid-deploy).
+
+const UI_PATH = import.meta.dir + "/index.html";
+let uiCache: { mtimeMs: number; size: number; version: string; html: string } | null = null;
+
+async function getUi(): Promise<{ version: string; html: string }> {
+  const f = Bun.file(UI_PATH);
+  const mtimeMs = f.lastModified;
+  const size = f.size;
+  if (!uiCache || uiCache.mtimeMs !== mtimeMs || uiCache.size !== size) {
+    const raw = await f.text();
+    const version = Bun.hash(raw).toString(16);
+    uiCache = { mtimeMs, size, version, html: raw.replaceAll("__UI_VERSION__", version) };
+  }
+  return uiCache;
+}
 
 Bun.serve({
   port: PORT, hostname: "::",
@@ -1124,8 +1146,14 @@ Bun.serve({
     const p = url.pathname;
 
     // no-cache (revalidate every load), not no-store — otherwise a deploy is invisible
-    // until the user knows to hard-refresh.
-    if (p === "/" || p === "/index.html") return new Response(htmlFile, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" } });
+    // until the user knows to hard-refresh. The ETag keeps revalidation cheap.
+    if (p === "/" || p === "/index.html") {
+      const ui = await getUi();
+      const etag = `"${ui.version}"`;
+      const headers = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache", ETag: etag };
+      if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+      return new Response(ui.html, { headers });
+    }
     if (p === "/api" || p === "/api/") return Response.json(API_DOCS);
     if (p === "/api/status") return Response.json(await getStatus());
 

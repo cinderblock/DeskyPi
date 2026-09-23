@@ -355,13 +355,38 @@ function showAdapterTip(el, name, id, bus, dev) {
   showTip(el, h);
 }
 
+// ==================== UI Version / Auto-Reload ====================
+// The dashboard is left open for hours, so a deploy would otherwise leave a stale page
+// talking to a newer backend. The server substitutes a hash of index.html into the page
+// below and reports the current one in every status message.
+const MY_UI_VERSION = '__UI_VERSION__';
+let pendingReload = false;
+
+function checkUiVersion(serverVersion) {
+  if (!serverVersion || pendingReload) return;
+  // An unsubstituted placeholder means an older backend that doesn't stamp the page.
+  if (MY_UI_VERSION.startsWith('__UI_')) return;
+  if (serverVersion === MY_UI_VERSION) return;
+  pendingReload = true;
+  maybeReload();
+}
+
+function maybeReload() {
+  if (!pendingReload) return;
+  // Don't yank the page out from under a dialog the user is part-way through filling in;
+  // hideModal() calls back here once it is dismissed.
+  if (!Q('#modal-bg').classList.contains('hidden')) return;
+  toast('New dashboard version — reloading', 'info');
+  setTimeout(() => location.reload(), 1500);
+}
+
 // ==================== SSE ====================
 function connect() {
   if (es) es.close();
   es = new EventSource('/api/events');
   Q('#dot').className = 'dot';
   let seeded = false;
-  es.onmessage = e => { S = JSON.parse(e.data); if (!seeded && S.history) { seedHist(S.history); seeded = true; } render(); };
+  es.onmessage = e => { S = JSON.parse(e.data); if (!seeded && S.history) { seedHist(S.history); seeded = true; } checkUiVersion(S.uiVersion); render(); };
   es.onerror = () => { Q('#dot').className = 'dot off'; es.close(); setTimeout(connect, 3000); };
 }
 
@@ -906,7 +931,7 @@ function showModal(html) {
   Q('#modal').innerHTML = html;
   Q('#modal-bg').classList.remove('hidden');
 }
-function hideModal() { Q('#modal-bg').classList.add('hidden'); }
+function hideModal() { Q('#modal-bg').classList.add('hidden'); maybeReload(); }
 
 function confirm2(title, msg, devInfo) {
   return new Promise(resolve => {
